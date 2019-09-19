@@ -1,278 +1,209 @@
-# cool-text-claccisifer-comparison
-A comparison of text classification methods.
+This repo demonstrates how deep neural networks can be used to classify text data, much like they can be used to classify images. There are different methods for classifying text data, and this repo compares multiple methods. This repo demonstrates how to classify a small text dataset and a larger text dataset, using embeddings in the neural network. A Long Short-Term Memory neural network is also instituted for the sake of comparison. This repo comes with a Jupyter notebook where the classification can be carried out and the arguments of the classifiers tweaked.
 
-import random as rn
-import tensorflow as tf
-import numpy as np
-import os
-import cv2
-import matplotlib.pyplot as plt
-from tqdm import tqdm
+The first section of the script classifies a small dataset, the Sentiment Labelled Dataset available from the UCI Machine Learning Repository. First, all necessary imports are made, the text data is converted to a CSV and concatenated, and then the training and testing data is created.
 
-from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
+```Python
 from keras.models import Sequential
-from keras.layers import Dense, Conv2D, BatchNormalization, Dropout, MaxPool2D, Flatten, Activation
-from keras.utils import to_categorical
-from keras.applications.resnet50 import ResNet50
-from keras.applications.inception_v3 import InceptionV3
-from keras.preprocessing.image import ImageDataGenerator
-
+from keras.layers import Embedding, Conv1D, Dense, GlobalMaxPooling1D, LSTM
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import confusion_matrix
+import pandas as pd
+import matplotlib.pyplot as plt
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+from keras.datasets import imdb
+import numpy as np
+from keras.preprocessing import sequence
 
-# separating training data into different folders
+# Converts text to CSV
+def csv_convert(input_data, data_source):
+    # separate labels and sentences on tabs
+    df = pd.read_csv(input_data, names=['sentence', 'label'], sep='\t')
+    df['source'] = data_source
+    return df
 
-images = []
-labels = []
+amz_data = "amazon_cells_labelled.txt"
+imdb_data = "imdb_labelled.txt"
+yelp_data = "yelp_labelled.txt"
 
-img_size = 150
+amz_data = csv_convert(amz_data, "Amazon")
+imdb_data = csv_convert(imdb_data, "IMDB")
+yelp_data = csv_convert(yelp_data, "Yelp")
 
-def training_data(im_class, dir):
-    # tqdm is for the display of progress bars
-    # for the image in the listed directory
-    for img in tqdm(os.listdir(dir)):
-        label = im_class
-        path = os.path.join(dir, img)
-        _, ftype = os.path.splitext(path)
-        if ftype == ".jpg":
-            # read in respective image as a color image
-            img = cv2.imread(path, cv2.IMREAD_COLOR)
-            # rsize the respective image
-            img = cv2.resize(img, (img_size, img_size))
+print(amz_data.head(5))
 
-            # make a numpy array out of the image
-            images.append(np.array(img))
-            labels.append(str(label))
+df_complete = pd.concat([amz_data, imdb_data, yelp_data])
+df_complete.to_csv("sentiment_labelled_complete.csv")
+print(amz_data.head(10))
 
-training_data('Daisy', 'C:/Users/Daniel/Downloads/flowers-recognition/flowers/daisy')
-print(len(images))
+# Separate out the features and labels from the CSV
 
-training_data('Sunflower', 'C:/Users/Daniel/Downloads/flowers-recognition/flowers/sunflower')
-print(len(images))
+features = df_complete['sentence'].values
+labels = df_complete['label'].values
 
-training_data('Tulip', 'C:/Users/Daniel/Downloads/flowers-recognition/flowers/tulip')
-print(len(images))
+# Creating training/testing features and labels
+# Still need to tokenize them
+X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.20, random_state=108)
+```
 
-training_data('Dandelion', 'C:/Users/Daniel/Downloads/flowers-recognition/flowers/dandelion')
-print(len(images))
+Next, tokens are created for the word features, the sequence sizes are standardized, and a chosen size for the embedding is selected.
 
-training_data('Rose', 'C:/Users/Daniel/Downloads/flowers-recognition/flowers/rose')
-print(len(images))
+```Python
+# Create the tokenizer, fit it on the text data
+# use text_to_sequences to actually conver the features to tokens
+tokenizer = Tokenizer(num_words=5000)
+tokenizer.fit_on_texts(X_train)
+X_train = tokenizer.texts_to_sequences(X_train)
+X_test = tokenizer.texts_to_sequences(X_test)
 
-# do label encoding
-encoder = LabelEncoder()
-y_labels = encoder.fit_transform(labels)
-# one hot encoding
-y_labels = to_categorical(y_labels, 5)
-x_features = np.array(images)
-# data normalization
-x_features = x_features/255
+# Need this for the creation of the network
+vocab_len = len(tokenizer.word_index) + 1
 
-X_train, X_test, y_train, y_test = train_test_split(x_features, y_labels, test_size=0.25, random_state=27)
+maxlen = 100
+X_train = pad_sequences(X_train, padding='post', maxlen=maxlen)
+X_test = pad_sequences(X_test, padding='post', maxlen=maxlen)
 
-np.random.seed(27)
-rn.seed(27)
-# graph level random seed for TF/Keras
-tf.set_random_seed(27)
+# Selects size/complexity of the embeddings
+embedding_dim = 50
+```
 
-# will make 5 x 2 subplots
-fig, ax = plt.subplots(2, 5)
-# set a specific size for the plot
-fig.set_size_inches(15, 15)
-# specify plotting on both axis
-for i in range(2):
-    for j in range(5):
-        # get a random integer between one and the final label in the list of labels
-        label = rn.randint(0, len(labels))
-        ax[i, j].imshow(images[label])
-        ax[i, j].set_title('Flower: '+labels[label])
-plt.tight_layout()
-plt.show()
+The next section creates the classification model and fits the model.
 
-# because the model is so large/deep it may be a good idea to perform some data augmentation in order
-# combat overfitting
-data_generator = ImageDataGenerator(width_shift_range=0.2, height_shift_range=0.2,
-                                    horizontal_flip=True)
-
-# fit on the trainign data to produce more data with the specified transformations
-data_generator.fit(X_train)
-
-def create_model():
-    # first specify the sequential nature of the model
+```Python
+# Creates the text classification model
+def sentiment_model(embedding_dim):
     model = Sequential()
-    # conv2d is the convolutional layer for 2d images
-    # first parameter is the number of memory cells - let's just try 64 units for now
-    # second parameter is the size of the "window" you want the CNN to use
-    # the shape of the data we are passing in, 3 x 150 x 150
-    model.add(Conv2D(64, (5, 5), input_shape=(150, 150, 3), padding='same'))
-    model.add(Activation("relu"))
-    model.add(MaxPool2D(pool_size=(2, 2)))
-    model.add(BatchNormalization())
-
-    model.add(Conv2D(64, (3, 3), padding='same'))
-    model.add(Activation("relu"))
-    model.add(MaxPool2D(pool_size=(2, 2)))
-    model.add(BatchNormalization())
-
-    model.add(Conv2D(128, (3, 3),  padding='same'))
-    model.add(Activation("relu"))
-    model.add(MaxPool2D(pool_size=(2, 2)))
-    model.add(BatchNormalization())
-
-    model.add(Conv2D(256, (3, 3), padding='same'))
-    model.add(Activation("relu"))
-    model.add(MaxPool2D(pool_size=(2, 2)))
-    model.add(BatchNormalization())
-
-    # flatten the data for the dense layer
-    model.add(Flatten())
-
-    model.add(Dense(256, activation='relu'))
-    model.add(Dropout(0.2))
-    model.add(Dense(64, activation='relu'))
-    model.add(Dropout(0.2))
-    model.add(Dense(5))
-    model.add(Activation('softmax'))
-    # now compile the model, specify loss, optimization, etc
-    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    # include the word embedding layers
+    model.add(Embedding(vocab_len, embedding_dim, input_length=maxlen))
+    model.add(Conv1D(128, 5, activation='relu'))
+    model.add(GlobalMaxPooling1D())
+    model.add(Dense(20, activation='relu'))
+    model.add(Dense(5, activation='relu'))
+    model.add(Dense(1, activation='sigmoid'))
+    model.compile(optimizer='adam',
+                  loss='binary_crossentropy',
+                  metrics=['accuracy'])
+    print(model.summary())
     return model
 
-model = create_model()
+model = sentiment_model(embedding_dim)
 
-batch_size = 64
-num_epochs = 50
+records = model.fit(X_train, y_train, epochs=10, verbose=1, validation_data=(X_test, y_test), batch_size=10)
+```
 
-# fit the generator, since we used one in making new data
+Now the model's performance is evaluated.
 
-filepath = "weights_custom.hdf5"
-callbacks = [ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max'),
-              ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, verbose=1, mode='min', min_lr=0.00001),
-             EarlyStopping(monitor= 'val_loss', min_delta=1e-10, patience=15, verbose=1, restore_best_weights=True)]
+```Python
+_, accuracy = model.evaluate(X_train, y_train, verbose=False)
+print("Training Accuracy: {:.4f}".format(accuracy))
+_, accuracy = model.evaluate(X_test, y_test, verbose=False)
+print("Testing Accuracy:  {:.4f}".format(accuracy))
 
-train_records = model.fit_generator(data_generator.flow(X_train, y_train, batch_size=batch_size), epochs = num_epochs,
-                          validation_data=(X_test, y_test), verbose= 1, steps_per_epoch=X_train.shape[0] // batch_size, callbacks=callbacks)
+def plot_history(history):
+    acc = history.history['acc']
+    val_acc = history.history['val_acc']
+    loss = history.history['loss']
+    val_loss = history.history['val_loss']
+    x = range(1, len(acc) + 1)
 
-# visualize training loss
-# declare important variables
-training_acc = train_records.history['acc']
-val_acc = train_records.history['val_acc']
-training_loss = train_records.history['loss']
-validation_loss = train_records.history['val_loss']
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(x, acc, 'r', label='Training acc')
+    plt.plot(x, val_acc, 'b', label='Validation acc')
+    plt.title('Accuracy Over EPochs')
 
-# gets the lengt of how long the model was trained for
-train_length = range(1, len(training_acc) + 1)
-
-def plot_stats(train_length, training_acc, val_acc, training_loss, validation_loss):
-
-    # plot the loss across the number of epochs
-    plt.figure()
-    plt.plot(train_length, training_loss, label='Training Loss')
-    plt.plot(train_length, validation_loss, label='Validation Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
+    plt.legend()
+    plt.subplot(1, 2, 2)
+    plt.plot(x, loss, 'r', label='Training loss')
+    plt.plot(x, val_loss, 'b', label='Validation loss')
+    plt.title('Loss Over Epochs')
     plt.legend()
 
-    plt.figure()
-    plt.plot(train_length, training_acc, label='Training Accuracy')
-    plt.plot(train_length, val_acc, label='Validation Accuracy')
-    plt.title('Training and validation accuracy')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
-    plt.legend()
     plt.show()
 
-def make_preds(model):
-    # make predictions
-    score = model.evaluate(X_test, y_test, verbose=0)
-    print('\nAchieved Accuracy:', score[1],'\n')
+plot_history(records)
+```
 
-    y_pred = model.predict(X_test)
-    # evalute model predictions
-    Y_pred_classes = np.argmax(y_pred, axis=1)
-    Y_true = np.argmax(y_test, axis=1)
-    confusion = confusion_matrix(Y_true, Y_pred_classes)
-    print(confusion)
+The script then implements a classifier on a second dataset, the IMDB dataset, which is larger than the first dataset. This loads in the data. (Thanks to Matthew Kerian/Cheez's [fix](https://stackoverflow.com/questions/55890813/how-to-fix-object-arrays-cannot-be-loaded-when-allow-pickle-false-for-imdb-loa/56243777) for the data loading error.)
 
-plot_stats(train_length, training_acc, val_acc, training_loss, validation_loss)
-make_preds(model)
+```Python
+# Bypass bug in current version of Keras, allows use of imdb dataset
+# modifies the default parameters of numpy's load function
+np_load_old = np.load
+np.load = lambda *a,**k: np_load_old(*a, allow_pickle=True, **k)
 
-# Create the base model and add it to our sequential framework
-resnet = ResNet50(weights='imagenet',
-                 include_top=False,
-                 input_shape=(150, 150, 3))
-print(resnet.summary())
-resnet_model = Sequential()
-resnet_model.add(resnet)
+(X_train, y_train), (X_test, y_test) = imdb.load_data(nb_words=10000)
 
-# Add in our own densely connected layers (after flattening the inputs)
-resnet_model.add(Flatten())
-resnet_model.add(Dense(256, activation='relu'))
-resnet_model.add(Dropout(0.2))
-resnet_model.add(Dense(64, activation='relu'))
-resnet_model.add(Dropout(0.2))
-resnet_model.add(Dense(5, activation='softmax'))
-resnet_model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+# get features and labels, make sure they are the same number
+features = np.concatenate((X_train, X_test), axis=0)
+labels = np.concatenate((y_train, y_test), axis=0)
 
-print(resnet_model.summary())
+max_words = 500
+X_train = sequence.pad_sequences(X_train, maxlen=max_words)
+X_test = sequence.pad_sequences(X_test, maxlen=max_words)
+```
 
-num_epochs = 10
+We now create the convolutional model for this dataset.
 
-filepath = "weights_resnet50.hdf5"
-callbacks = [ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max'),
-              ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, verbose=1, mode='min', min_lr=0.00001),
-             EarlyStopping(monitor= 'val_loss', min_delta=1e-10, patience=15, verbose=1, restore_best_weights=True)]
+```Python
+# Create the convolutional model with the embedding layer
 
-resnet_records = resnet_model.fit_generator(data_generator.flow(X_train, y_train, batch_size=batch_size), epochs = num_epochs,
-                          validation_data=(X_test, y_test), verbose= 1, steps_per_epoch=X_train.shape[0] // batch_size, callbacks=callbacks)
+def conv_model(max_words):
 
-# visualize training loss
-# declare important variables
-training_acc = resnet_records.history['acc']
-val_acc = resnet_records.history['val_acc']
-training_loss = resnet_records.history['loss']
-validation_loss = resnet_records.history['val_loss']
+    model = Sequential()
+    model.add(Embedding(10000, 64, input_length=max_words))
+    model.add(Conv1D(128, 5, activation='relu'))
+    model.add(Conv1D(64, 5, activation='relu'))
+    model.add(GlobalMaxPooling1D())
+    model.add(Dense(10, activation='relu'))
+    model.add(Dense(5, activation='relu'))
+    model.add(Dense(1, activation='sigmoid'))
+    model.compile(optimizer='adam',
+                  loss='binary_crossentropy',
+                  metrics=['accuracy'])
+    print(model.summary())
+    return model
 
-# gets the length of how long the model was trained for
-train_length = range(1, len(training_acc) + 1)
+model = conv_model(max_words)
 
-plot_stats(train_length, training_acc, val_acc, training_loss, validation_loss)
-make_preds(resnet_model)
+records = model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=2, batch_size=128, verbose=1)
+```
 
+Then comes the evaluation.
 
-Incep = InceptionV3(weights='imagenet',
-                 include_top=False,
-                 input_shape=(150, 150, 3))
-Incep_model = Sequential()
-Incep_model.add(Incep)
-Incep_model.add(Flatten())
-Incep_model.add(Dense(256, activation='relu'))
-Incep_model.add(Dropout(0.2))
-Incep_model.add(Dense(64, activation='relu'))
-Incep_model.add(Dropout(0.2))
-Incep_model.add(Dense(5, activation='softmax'))
-print(Incep_model.summary())
-Incep_model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+```Python
+# model evaluation
+accuracy = model.evaluate(X_test, y_test, verbose=0)
+print("Accuracy: %.2f%%" % (accuracy[1]*100))
+plot_history(records)
+```
 
-filepath = "weights_Incep.hdf5"
-callbacks = [ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max'),
-              ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, verbose=1, mode='min', min_lr=0.00001),
-             EarlyStopping(monitor= 'val_loss', min_delta=1e-10, patience=15, verbose=1, restore_best_weights=True)]
+Finally, the LSTM model is created, fitted, and evaluated.
 
-num_epochs = 10
+```Python
+# Create the LSTM model
 
-Incep_records = Incep_model.fit_generator(data_generator.flow(X_train, y_train, batch_size=batch_size), epochs = num_epochs,
-                          validation_data=(X_test, y_test), verbose= 1, steps_per_epoch=X_train.shape[0] // batch_size, callbacks=callbacks)
+def LSTM_model(max_words):
+    model = Sequential()
+    model.add(Embedding(10000, 32, input_length=max_words))
+    model.add(LSTM(64, dropout=0.2, return_sequences=True))
+    model.add(LSTM(128, dropout=0.2))
+    model.add(Dense(20))
+    model.add(Dense(1, activation='sigmoid'))
+    model.compile(optimizer='adam',
+                  loss='binary_crossentropy',
+                  metrics=['accuracy'])
+    print(model.summary())
+    return model
 
-# visualize training loss
-# declare important variables
-training_acc = Incep_records.history['acc']
-val_acc = Incep_records.history['val_acc']
-training_loss = Incep_records.history['loss']
-validation_loss = Incep_records.history['val_loss']
+model = LSTM_model(max_words)
+records = model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=2, batch_size=128, verbose=1)
 
-# gets the length of how long the model was trained for
-train_length = range(1, len(training_acc) + 1)
+# model evaluation
+accuracy = model.evaluate(X_test, y_test, verbose=0)
+print("Accuracy: %.2f%%" % (accuracy[1]*100))
 
-plot_stats(train_length, training_acc, val_acc, training_loss, validation_loss)
-make_preds(Incep_model)
+plot_history(records)
+```
+
+![]()
+
