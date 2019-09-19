@@ -16,9 +16,9 @@ def csv_convert(input_data, data_source):
     df['source'] = data_source
     return df
 
-amz_data = "C:/Users/Daniel/Downloads/sentiment labelled sentences/sentiment labelled sentences/amazon_cells_labelled.txt"
-imdb_data = "C:/Users/Daniel/Downloads/sentiment labelled sentences/sentiment labelled sentences/imdb_labelled.txt"
-yelp_data = "C:/Users/Daniel/Downloads/sentiment labelled sentences/sentiment labelled sentences/yelp_labelled.txt"
+amz_data = "sentiment labelled sentences/amazon_cells_labelled.txt"
+imdb_data = "/sentiment labelled sentences/imdb_labelled.txt"
+yelp_data = "/sentiment labelled sentences/yelp_labelled.txt"
 
 amz_data = csv_convert(amz_data, "Amazon")
 imdb_data = csv_convert(imdb_data, "IMDB")
